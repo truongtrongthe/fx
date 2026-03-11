@@ -91,23 +91,23 @@ export function computeSig(bars, tf) {
   const thL = cfg.scoreThresholdLong, thS = cfg.scoreThresholdShort;
 
   let sc = 0, reasons = [];
-  if (xUp) { sc += 3; reasons.push({ t: "EMA 8×21 BULL CROSS", c: "#00ff9d", w: "+3" }); }
-  else if (xDn) { sc -= 3; reasons.push({ t: "EMA 8×21 BEAR CROSS", c: "#ff3355", w: "-3" }); }
-  else if (up) { sc += 1; reasons.push({ t: "EMA UPTREND STACK", c: "#00ff9d", w: "+1" }); }
-  else if (dn) { sc -= 1; reasons.push({ t: "EMA DOWNTREND STACK", c: "#ff3355", w: "-1" }); }
-  if (R < rsiOS) { sc += 2; reasons.push({ t: `RSI OVERSOLD ${R}`, c: "#00ff9d", w: "+2" }); }
-  else if (R > rsiOB) { sc -= 2; reasons.push({ t: `RSI OVERBOUGHT ${R}`, c: "#ff3355", w: "-2" }); }
-  else if (R > rsiML && R < rsiMH && up) { sc += 1; reasons.push({ t: `RSI MOMENTUM ${R}`, c: "#f5c518", w: "+1" }); }
+  if (xUp) { sc += 3; reasons.push({ t: "EMA 8×21 BULL CROSS", c: "#059669", w: "+3" }); }
+  else if (xDn) { sc -= 3; reasons.push({ t: "EMA 8×21 BEAR CROSS", c: "#dc2626", w: "-3" }); }
+  else if (up) { sc += 1; reasons.push({ t: "EMA UPTREND STACK", c: "#059669", w: "+1" }); }
+  else if (dn) { sc -= 1; reasons.push({ t: "EMA DOWNTREND STACK", c: "#dc2626", w: "-1" }); }
+  if (R < rsiOS) { sc += 2; reasons.push({ t: `RSI OVERSOLD ${R}`, c: "#059669", w: "+2" }); }
+  else if (R > rsiOB) { sc -= 2; reasons.push({ t: `RSI OVERBOUGHT ${R}`, c: "#dc2626", w: "-2" }); }
+  else if (R > rsiML && R < rsiMH && up) { sc += 1; reasons.push({ t: `RSI MOMENTUM ${R}`, c: "#b45309", w: "+1" }); }
   if (B) {
-    if (P <= B.lower) { sc += 2; reasons.push({ t: "BB LOWER BOUNCE", c: "#00ff9d", w: "+2" }); }
-    else if (P >= B.upper) { sc -= 2; reasons.push({ t: "BB UPPER REJECT", c: "#ff3355", w: "-2" }); }
-    else if (P > B.mid && up) { sc += 1; reasons.push({ t: "ABOVE BB MID", c: "#f5c518", w: "+1" }); }
+    if (P <= B.lower) { sc += 2; reasons.push({ t: "BB LOWER BOUNCE", c: "#059669", w: "+2" }); }
+    else if (P >= B.upper) { sc -= 2; reasons.push({ t: "BB UPPER REJECT", c: "#dc2626", w: "-2" }); }
+    else if (P > B.mid && up) { sc += 1; reasons.push({ t: "ABOVE BB MID", c: "#b45309", w: "+1" }); }
     else if (P < B.mid && dn) { sc -= 1; reasons.push({ t: "BELOW BB MID", c: "#ff9d00", w: "-1" }); }
   }
-  if (St < stOS) { sc += 1; reasons.push({ t: `STOCH OS ${St}`, c: "#00ff9d", w: "+1" }); }
-  else if (St > stOB) { sc -= 1; reasons.push({ t: `STOCH OB ${St}`, c: "#ff3355", w: "-1" }); }
-  if (M.h > 0 && M.v > 0) { sc += 1; reasons.push({ t: "MACD BULL", c: "#00ff9d", w: "+1" }); }
-  else if (M.h < 0 && M.v < 0) { sc -= 1; reasons.push({ t: "MACD BEAR", c: "#ff3355", w: "-1" }); }
+  if (St < stOS) { sc += 1; reasons.push({ t: `STOCH OS ${St}`, c: "#059669", w: "+1" }); }
+  else if (St > stOB) { sc -= 1; reasons.push({ t: `STOCH OB ${St}`, c: "#dc2626", w: "-1" }); }
+  if (M.h > 0 && M.v > 0) { sc += 1; reasons.push({ t: "MACD BULL", c: "#059669", w: "+1" }); }
+  else if (M.h < 0 && M.v < 0) { sc -= 1; reasons.push({ t: "MACD BEAR", c: "#dc2626", w: "-1" }); }
 
   const conf = Math.min(97, (Math.abs(sc) / 10) * 100 + cfg.confBase + Math.random() * cfg.confScale);
   const sig = sc >= thL ? "LONG" : sc <= -thS ? "SHORT" : "WAIT";
@@ -131,11 +131,11 @@ export function mtfBias(sigs) {
     sg.signal === "LONG" ? l++ : sg.signal === "SHORT" ? s++ : w++;
   });
   const tot = l + s + w || 1;
-  if (l / tot >= 0.7) return { label: "STRONG BULL", col: "#00ff9d", l, s, w };
-  if (l / tot >= 0.5) return { label: "BULLISH ↑", col: "#00dd88", l, s, w };
-  if (s / tot >= 0.7) return { label: "STRONG BEAR", col: "#ff3355", l, s, w };
-  if (s / tot >= 0.5) return { label: "BEARISH ↓", col: "#ff6680", l, s, w };
-  return { label: "NEUTRAL ↔", col: "#f5c518", l, s, w };
+  if (l / tot >= 0.7) return { label: "STRONG BULL", col: "#059669", l, s, w };
+  if (l / tot >= 0.5) return { label: "BULLISH ↑", col: "#059669", l, s, w };
+  if (s / tot >= 0.7) return { label: "STRONG BEAR", col: "#dc2626", l, s, w };
+  if (s / tot >= 0.5) return { label: "BEARISH ↓", col: "#dc2626", l, s, w };
+  return { label: "NEUTRAL ↔", col: "#64748b", l, s, w };
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -210,8 +210,14 @@ function getTrendFromFVG(fvgs) {
   return last.type === "bull" ? "bull" : "bear";
 }
 
-function isZoneMitigated(bars, zone, type, fromIndex) {
-  for (let i = fromIndex; i < bars.length; i++) {
+/**
+ * Returns true if the zone has been mitigated by price (bull: low <= zone[1]; bear: high >= zone[0]).
+ * When excludeLastBar is true (default), the current (incomplete) bar is ignored so LIMIT signals
+ * don't flicker to WAIT when the live candle touches the FVG — signal stays until candle closes.
+ */
+function isZoneMitigated(bars, zone, type, fromIndex, excludeLastBar = true) {
+  const end = excludeLastBar && bars.length > 1 ? bars.length - 1 : bars.length;
+  for (let i = fromIndex; i < end; i++) {
     if (type === "bull" && bars[i].l <= zone[1]) return true;
     if (type === "bear" && bars[i].h >= zone[0]) return true;
   }
@@ -307,13 +313,13 @@ export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars) {
   const tp2Price = signal === "LONG" ? P + tpD * 1.8 : P - tpD * 1.8;
 
   const reasons = [];
-  if (trend) reasons.push({ t: `TREND (FVG) ${trend.toUpperCase()}`, c: trend === "bull" ? "#00ff9d" : "#ff3355" });
-  if (structureTrend && structureTrend === trend) reasons.push({ t: "STRUCTURE ALIGNED", c: "#00c8ff" });
-  if (lastBOS) reasons.push({ t: `BOS ${lastBOS.dir.toUpperCase()}`, c: lastBOS.dir === "bull" ? "#00ff9d" : "#ff3355" });
-  if (poi) reasons.push({ t: `POI ${poi.type}`, c: "#f5c518" });
-  if (entryType === "limit") reasons.push({ t: "LIMIT @ zone", c: "#00c8ff" });
-  if (sweepDetected) reasons.push({ t: "Sweep", c: "#ff9d00" });
-  if (wOrShsOnLowerTF) reasons.push({ t: "W/SHS", c: "#00ff9d" });
+  if (trend) reasons.push({ t: `TREND (FVG) ${trend.toUpperCase()}`, c: trend === "bull" ? "#059669" : "#dc2626" });
+  if (structureTrend && structureTrend === trend) reasons.push({ t: "STRUCTURE ALIGNED", c: "#0284c7" });
+  if (lastBOS) reasons.push({ t: `BOS ${lastBOS.dir.toUpperCase()}`, c: lastBOS.dir === "bull" ? "#059669" : "#dc2626" });
+  if (poi) reasons.push({ t: `POI ${poi.type}`, c: "#b45309" });
+  if (entryType === "limit") reasons.push({ t: "LIMIT @ zone", c: "#0284c7" });
+  if (sweepDetected) reasons.push({ t: "Sweep", c: "#b45309" });
+  if (wOrShsOnLowerTF) reasons.push({ t: "W/SHS", c: "#059669" });
 
   return {
     trend,

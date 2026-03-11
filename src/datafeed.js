@@ -1,9 +1,8 @@
 /**
- * Twelve Data REST API feed for XAU/USD (gold) price.
- * Loads historic OHLC then polls price. Stays under free-tier limit (8 credits/min).
+ * Twelve Data feed for XAU/USD (gold): REST only for history (cached when possible),
+ * WebSocket only for live price. No REST price polling.
  *
- * REST API: https://twelvedata.com/docs
- * Free tier: 8 requests/min — history loaded one TF per 8s, then price every 10s (6/min).
+ * REST: history (time_series) when cache miss. WebSocket: wss://ws.twelvedata.com/v1/quotes/price.
  */
 
 import { useState, useEffect } from "react";
@@ -13,13 +12,17 @@ import { TIMEFRAMES } from "./algorithm.js";
 //  CONFIG
 // ═══════════════════════════════════════════════════════════════════════
 const TWELVEDATA_API_BASE = "https://api.twelvedata.com";
+const TWELVEDATA_WS_URL = "wss://ws.twelvedata.com/v1/quotes/price";
 const XAUUSD_SYMBOL = "XAU/USD";
 const SPREAD_PIPS = 0.2;
 const MAX_BARS_PER_TF = 150;
 /** Delay between each history request (one credit each) to stay under 8/min */
 const HISTORY_REQUEST_DELAY_MS = 8_000;
-/** Live price poll interval — 6/min (every 10s) */
-const POLL_INTERVAL_MS = 10_000;
+const WS_RECONNECT_DELAY_MS = 5_000;
+
+/** History cache: reload within TTL uses cache and skips API calls */
+const CACHE_KEY_PREFIX = "richai_hist_";
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 const getApiKey = () =>
   typeof import.meta !== "undefined" && import.meta.env?.VITE_TWELVEDATA_API_KEY
@@ -67,13 +70,37 @@ async function fetchHistoryForTf(tf) {
   return bars.slice(-MAX_BARS_PER_TF);
 }
 
+function getCachedBars(tfKey) {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY_PREFIX + tfKey);
+    if (!raw) return null;
+    const { bars, fetchedAt } = JSON.parse(raw);
+    if (!Array.isArray(bars) || typeof fetchedAt !== "number") return null;
+    if (Date.now() - fetchedAt >= CACHE_TTL_MS) return null;
+    return bars;
+  } catch {
+    return null;
+  }
+}
+
+function setCachedBars(tfKey, bars) {
+  try {
+    localStorage.setItem(
+      CACHE_KEY_PREFIX + tfKey,
+      JSON.stringify({ bars, fetchedAt: Date.now() })
+    );
+  } catch {
+    // localStorage full or disabled; treat as cache miss on next load
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 //  HOOK
 // ═══════════════════════════════════════════════════════════════════════
 /**
- * Polls Twelve Data REST price API, builds OHLC bars per timeframe,
- * and returns live price, spread, feed status, and bars.
- * @returns {{ allBars, livePrice, spread, tickCount, feedStatus, feedError }}
+ * WebSocket for real-time price; REST for history and 30s fallback.
+ * @returns {{ allBars, livePrice, spread, tickCount, feedStatus, feedError, feedSource }}
+ *   feedSource: "ws" | "rest" | null — last price update source.
  */
 export function useDataFeed() {
   const [allBars, setAllBars] = useState(() => {
@@ -86,16 +113,20 @@ export function useDataFeed() {
   const [tickCount, setTickCount] = useState(0);
   const [feedStatus, setFeedStatus] = useState("connecting");
   const [feedError, setFeedError] = useState(null);
+  const [feedSource, setFeedSource] = useState(null); // "ws" | "rest" | null
 
   useEffect(() => {
     let cancelled = false;
+    let ws = null;
+    let reconnectTimeoutId = null;
 
-    function applyPrice(mid) {
+    function applyPrice(mid, source) {
       if (mid == null || !Number.isFinite(mid) || mid <= 0) return;
       const bid = +(mid - SPREAD_PIPS / 2).toFixed(2);
       const ask = +(mid + SPREAD_PIPS / 2).toFixed(2);
       setFeedStatus("open");
       setFeedError(null);
+      if (source) setFeedSource(source);
       setLivePrice({ bid, ask, mid });
       setSpread(+(SPREAD_PIPS / 0.1).toFixed(1));
       setTickCount((c) => c + 1);
@@ -116,32 +147,43 @@ export function useDataFeed() {
       });
     }
 
-    async function poll() {
+    function connectWs() {
       if (cancelled) return;
       const apiKey = getApiKey();
-      const url = `${TWELVEDATA_API_BASE}/price?symbol=${encodeURIComponent(XAUUSD_SYMBOL)}&apikey=${encodeURIComponent(apiKey)}`;
+      const url = `${TWELVEDATA_WS_URL}?apikey=${encodeURIComponent(apiKey)}`;
       try {
-        const res = await fetch(url);
-        const data = await res.json().catch(() => ({}));
-        if (cancelled) return;
-        if (!res.ok) {
-          const msg = data.message || data.error?.message || `HTTP ${res.status}`;
-          setFeedStatus("error");
-          setFeedError(msg);
-          return;
-        }
-        const raw = data.price;
-        const mid = raw != null ? Number(raw) : NaN;
-        if (Number.isFinite(mid)) {
-          applyPrice(mid);
-        } else {
-          setFeedStatus("error");
-          setFeedError(data.message || "No price in response");
-        }
+        ws = new WebSocket(url);
+        ws.onopen = () => {
+          if (cancelled || !ws) return;
+          ws.send(JSON.stringify({ action: "subscribe", params: { symbols: XAUUSD_SYMBOL } }));
+          setFeedStatus("open");
+          setFeedError(null);
+        };
+        ws.onmessage = (event) => {
+          if (cancelled) return;
+          try {
+            const msg = JSON.parse(event.data);
+            if (msg && typeof msg.price === "number" && Number.isFinite(msg.price)) {
+              applyPrice(msg.price, "ws");
+            }
+          } catch {
+            // ignore non-JSON or non-price messages
+          }
+        };
+        ws.onclose = () => {
+          if (cancelled) return;
+          setFeedStatus("connecting");
+          if (!cancelled && reconnectTimeoutId == null) {
+            reconnectTimeoutId = setTimeout(connectWs, WS_RECONNECT_DELAY_MS);
+          }
+        };
+        ws.onerror = () => {
+          if (!cancelled) setFeedStatus("connecting");
+        };
       } catch (err) {
         if (!cancelled) {
           setFeedStatus("error");
-          setFeedError(err?.message || "Network error");
+          setFeedError(err?.message || "WebSocket failed");
         }
       }
     }
@@ -150,24 +192,31 @@ export function useDataFeed() {
 
     async function init() {
       try {
-        // 1) Load historical candles one timeframe at a time (1 credit per request)
-        const history = {};
+        // 1) Load historical candles: use cache when valid, else fetch (rate-limited)
+        let lastWasFetch = false;
         for (let i = 0; i < TIMEFRAMES.length; i++) {
-          if (cancelled) return null;
+          if (cancelled) return;
           const tf = TIMEFRAMES[i];
+          const cached = getCachedBars(tf.key);
+          if (cached != null) {
+            setAllBars((prev) => ({ ...prev, [tf.key]: cached }));
+            lastWasFetch = false;
+            continue;
+          }
           try {
             const bars = await fetchHistoryForTf(tf);
-            if (cancelled) return null;
-            history[tf.key] = bars;
+            if (cancelled) return;
+            setCachedBars(tf.key, bars);
             setAllBars((prev) => ({ ...prev, [tf.key]: bars }));
+            lastWasFetch = true;
           } catch (e) {
             // eslint-disable-next-line no-console
             console.warn(`[TwelveData REST] history failed for ${tf.key}`, e);
-            history[tf.key] = [];
+            lastWasFetch = true;
           }
-          if (i < TIMEFRAMES.length - 1) await delay(HISTORY_REQUEST_DELAY_MS);
+          if (lastWasFetch && i < TIMEFRAMES.length - 1) await delay(HISTORY_REQUEST_DELAY_MS);
         }
-        if (cancelled) return null;
+        if (cancelled) return;
         setFeedStatus("connecting");
         setFeedError(null);
       } catch (e) {
@@ -176,24 +225,22 @@ export function useDataFeed() {
           setFeedError(e?.message || "Failed to load history");
         }
       }
-      if (cancelled) return null;
-      // 2) Start live polling (2 requests/min)
-      await poll();
-      if (cancelled) return null;
-      const id = setInterval(poll, POLL_INTERVAL_MS);
-      return id;
+      if (cancelled) return;
+      // 2) Live price via WebSocket only (no REST price API)
+      connectWs();
     }
 
-    let intervalId = null;
-    init().then((id) => {
-      if (!cancelled) intervalId = id;
-    });
+    init();
 
     return () => {
       cancelled = true;
-      if (intervalId) clearInterval(intervalId);
+      if (reconnectTimeoutId) clearTimeout(reconnectTimeoutId);
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
     };
   }, []);
 
-  return { allBars, livePrice, spread, tickCount, feedStatus, feedError };
+  return { allBars, livePrice, spread, tickCount, feedStatus, feedError, feedSource };
 }

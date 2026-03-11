@@ -42,12 +42,12 @@ export function AlgorithmSettingsPanel({ onConfigApplied }) {
   const hasKey = !!(typeof import.meta !== "undefined" && import.meta.env?.VITE_ANTHROPIC_KEY);
 
   return (
-    <div style={{ background: "#ffffff", border: "1px solid #c8d1e0", borderRadius: 8, padding: 12 }}>
-      <div style={{ fontSize: 9, color: "#1a3050", letterSpacing: 2, marginBottom: 8 }}>
+    <div style={{ background: "#ffffff", border: "1px solid #dde0e4", borderRadius: 8, padding: 12 }}>
+      <div style={{ fontSize: 9, color: "#1a1a1a", letterSpacing: 2, marginBottom: 8, fontWeight: 700 }}>
         LLM ALGORITHM TUNER · ANTHROPIC
       </div>
       {!hasKey && (
-        <div style={{ background: "#fff7e6", border: "1px solid #ffd591", borderRadius: 6, padding: "6px 10px", fontSize: 9, color: "#ad6800", marginBottom: 8 }}>
+        <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "6px 10px", fontSize: 9, color: "#b45309", marginBottom: 8 }}>
           Set VITE_ANTHROPIC_KEY in .env to use this feature.
         </div>
       )}
@@ -62,11 +62,11 @@ export function AlgorithmSettingsPanel({ onConfigApplied }) {
           padding: "6px 8px",
           fontSize: 10,
           fontFamily: "inherit",
-          border: "1px solid #c8d1e0",
+          border: "1px solid #dde0e4",
           borderRadius: 6,
           resize: "vertical",
-          background: "#fafbfc",
-          color: "#223047",
+          background: "#f8fafc",
+          color: "#1a1a1a",
           boxSizing: "border-box",
         }}
       />
@@ -80,9 +80,9 @@ export function AlgorithmSettingsPanel({ onConfigApplied }) {
             fontSize: 9,
             fontFamily: "inherit",
             fontWeight: 700,
-            background: loading ? "#c3ccdd" : "#e8eef5",
-            color: "#1a3050",
-            border: "1px solid #8bb6e8",
+            background: loading ? "#cbd5e1" : "#f8fafc",
+            color: "#1a1a1a",
+            border: "1px solid #dde0e4",
             borderRadius: 6,
             cursor: loading ? "not-allowed" : "pointer",
           }}
@@ -97,9 +97,9 @@ export function AlgorithmSettingsPanel({ onConfigApplied }) {
             padding: "5px 12px",
             fontSize: 9,
             fontFamily: "inherit",
-            background: "#f5f7ff",
-            color: "#5f6b7a",
-            border: "1px solid #c8d1e0",
+            background: "#f8fafc",
+            color: "#5c5c5c",
+            border: "1px solid #dde0e4",
             borderRadius: 6,
             cursor: loading ? "not-allowed" : "pointer",
           }}
@@ -114,9 +114,9 @@ export function AlgorithmSettingsPanel({ onConfigApplied }) {
             padding: "6px 10px",
             borderRadius: 6,
             fontSize: 9,
-            background: lastResult.success ? "#e6fffb" : "#fff1f0",
-            border: lastResult.success ? "1px solid #87e8de" : "1px solid #ffa39e",
-            color: lastResult.success ? "#0d5c52" : "#cf1322",
+            background: lastResult.success ? "#ecfdf5" : "#fef2f2",
+            border: lastResult.success ? "1px solid #a7f3d0" : "1px solid #fecaca",
+            color: lastResult.success ? "#065f46" : "#b91c1c",
           }}
         >
           {lastResult.reset
