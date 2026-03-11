@@ -47,8 +47,26 @@ export function AlgorithmSettingsPanel({ onConfigApplied }) {
         LLM ALGORITHM TUNER · ANTHROPIC
       </div>
       {!hasKey && (
-        <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 6, padding: "6px 10px", fontSize: 9, color: "#b45309", marginBottom: 8 }}>
-          Set VITE_ANTHROPIC_KEY in .env to use this feature.
+        <div style={{ marginBottom: 8 }}>
+          <a
+            href="https://form.typeform.com/to/gSQXL263"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: "inline-block",
+              padding: "6px 12px",
+              fontSize: 10,
+              fontWeight: 600,
+              color: "#1a1a1a",
+              background: "#f8fafc",
+              border: "1px solid #dde0e4",
+              borderRadius: 6,
+              textDecoration: "none",
+              cursor: "pointer",
+            }}
+          >
+            Login / Signup
+          </a>
         </div>
       )}
       <textarea
