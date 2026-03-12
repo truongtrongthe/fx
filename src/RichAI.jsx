@@ -4,6 +4,7 @@ import {
   computeSig,
   mtfBias,
   computeExpertSig,
+  getTrendAndPOIFromHigherTF,
   MIN_BARS_EXPERT,
 } from "./algorithm.js";
 import { useDataFeed } from "./datafeed.js";
@@ -47,12 +48,14 @@ export default function RichAI() {
       return s;
     });
     setExpertSigs(() => {
+      const higherTFContext = getTrendAndPOIFromHigherTF(allBars);
       const e = {};
       TIMEFRAMES.forEach((tf, i) => {
         const b = allBars[tf.key];
         const lowerKey = i > 0 ? TIMEFRAMES[i - 1].key : null;
         const lowerBars = lowerKey ? allBars[lowerKey] : null;
-        if (b && b.length >= MIN_BARS_EXPERT) e[tf.key] = computeExpertSig(b, tf.key, tf, lowerBars);
+        const ctx = (tf.key === "1m" || tf.key === "5m") ? higherTFContext : null;
+        if (b && b.length >= MIN_BARS_EXPERT) e[tf.key] = computeExpertSig(b, tf.key, tf, lowerBars, ctx);
       });
       return e;
     });
@@ -64,13 +67,15 @@ export default function RichAI() {
       const cur=barsRef.current;
       const newSigs={};
       const newExpertSigs={};
+      const higherTFContext = getTrendAndPOIFromHigherTF(cur);
       TIMEFRAMES.forEach((tf,i)=>{
         const b=cur[tf.key];
         if(b&&b.length>=25){const s=computeSig(b,tf);if(s)newSigs[tf.key]=s;}
         if(b&&b.length>=MIN_BARS_EXPERT){
           const lowerKey = i > 0 ? TIMEFRAMES[i-1].key : null;
           const lowerBars = lowerKey ? cur[lowerKey] : null;
-          const ex = computeExpertSig(b, tf.key, tf, lowerBars);
+          const ctx = (tf.key === "1m" || tf.key === "5m") ? higherTFContext : null;
+          const ex = computeExpertSig(b, tf.key, tf, lowerBars, ctx);
           if(ex) newExpertSigs[tf.key]=ex;
         }
       });

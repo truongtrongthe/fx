@@ -140,9 +140,15 @@ export function mtfBias(sigs) {
 
 // ═══════════════════════════════════════════════════════════════════════
 //  EXPERT (SMC/ICT) — structure, POI, FVG, sweep, W-SHS
+//  H4/1H = trend + POI (cung/cầu). M1/M5 = canh điểm vào (entry watch).
 // ═══════════════════════════════════════════════════════════════════════
 const PIVOT_LEFT = 2, PIVOT_RIGHT = 2;
 export const MIN_BARS_EXPERT = 35;
+
+/** TFs used to determine trend and supply/demand (POI). */
+export const TREND_POI_TF_KEYS = ["4H", "1H"];
+/** TFs used to watch for entry (signal only when aligned with HTF trend). */
+export const ENTRY_WATCH_TF_KEYS = ["1m", "5m"];
 
 function getSwingHighs(bars, n = 8) {
   if (!bars || bars.length < PIVOT_LEFT + PIVOT_RIGHT + 1) return [];
@@ -248,7 +254,54 @@ function detectWOrSHS(bars, direction) {
   return false;
 }
 
-export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars) {
+/**
+ * Trend + POI from H4 then 1H. Used so M1/M5 only signal when aligned with HTF.
+ * @param {Record<string, import('./datafeed.js').Bar[]>} allBars - Bars keyed by tf key (e.g. "4H", "1H").
+ * @returns {{ trend: 'bull'|'bear'|null, poi: { zone: number[], type: string, direction: 'long'|'short' }|null, lastBOS: object|null, fromTf: string|null }}
+ */
+export function getTrendAndPOIFromHigherTF(allBars) {
+  const out = { trend: null, poi: null, lastBOS: null, fromTf: null };
+  for (const tfKey of TREND_POI_TF_KEYS) {
+    const bars = allBars && allBars[tfKey];
+    if (!bars || bars.length < MIN_BARS_EXPERT) continue;
+    const swingHighs = getSwingHighs(bars);
+    const swingLows = getSwingLows(bars);
+    const structureTrend = getTrendFromStructure(swingHighs, swingLows);
+    const lastBOS = detectBOS(bars, swingHighs, swingLows);
+    const fvgs = findFVG(bars);
+    const fvgTrend = getTrendFromFVG(fvgs);
+    const trend = fvgTrend || structureTrend;
+    if (!trend || !lastBOS || lastBOS.dir !== trend || !fvgs.length) continue;
+    const lastSH = swingHighs[swingHighs.length - 1];
+    const lastSL = swingLows[swingLows.length - 1];
+    let poi = null;
+    if (trend === "bull") {
+      const unmitigated = fvgs.filter(z => z.type === "bull" && !isZoneMitigated(bars, z.zone, "bull", z.barIndex + 3));
+      if (unmitigated.length) {
+        const z = unmitigated[unmitigated.length - 1];
+        poi = { zone: z.zone, type: "unmitigated", direction: "long" };
+      } else {
+        poi = { zone: [lastSL.price - 2, lastSL.price + 2], type: "liquidity", direction: "long" };
+      }
+    } else {
+      const unmitigated = fvgs.filter(z => z.type === "bear" && !isZoneMitigated(bars, z.zone, "bear", z.barIndex + 3));
+      if (unmitigated.length) {
+        const z = unmitigated[unmitigated.length - 1];
+        poi = { zone: z.zone, type: "unmitigated", direction: "short" };
+      } else {
+        poi = { zone: [lastSH.price - 2, lastSH.price + 2], type: "liquidity", direction: "short" };
+      }
+    }
+    out.trend = trend;
+    out.poi = poi;
+    out.lastBOS = lastBOS;
+    out.fromTf = tfKey;
+    break;
+  }
+  return out;
+}
+
+export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars, higherTFContext = null) {
   if (!bars || bars.length < MIN_BARS_EXPERT || !tfDef) return null;
   const swingHighs = getSwingHighs(bars);
   const swingLows = getSwingLows(bars);
@@ -303,7 +356,18 @@ export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars) {
 
   let signal = "WAIT";
   if (poi && (entryType === "limit" || entryType === "market")) {
-    signal = poi.direction === "long" ? "LONG" : "SHORT";
+    const rawDir = poi.direction === "long" ? "LONG" : "SHORT";
+    // H4/1H chỉ dùng để phân tích trend + POI — không ra lệnh vào.
+    if (TREND_POI_TF_KEYS.includes(tfKey)) {
+      signal = "WAIT";
+    } else if (ENTRY_WATCH_TF_KEYS.includes(tfKey) && higherTFContext && higherTFContext.trend) {
+      // M1/M5 chỉ báo LONG/SHORT khi cùng chiều với trend H4/1H.
+      if ((higherTFContext.trend === "bull" && rawDir === "LONG") || (higherTFContext.trend === "bear" && rawDir === "SHORT")) {
+        signal = rawDir;
+      }
+    } else {
+      signal = rawDir;
+    }
   }
 
   const cfg = getAlgorithmConfig();
@@ -313,6 +377,8 @@ export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars) {
   const tp2Price = signal === "LONG" ? P + tpD * 1.8 : P - tpD * 1.8;
 
   const reasons = [];
+  if (TREND_POI_TF_KEYS.includes(tfKey)) reasons.push({ t: "H4/1H → trend & POI only", c: "#64748b" });
+  if (ENTRY_WATCH_TF_KEYS.includes(tfKey) && higherTFContext && higherTFContext.fromTf) reasons.push({ t: `TREND FROM ${higherTFContext.fromTf}`, c: "#0284c7" });
   if (trend) reasons.push({ t: `TREND (FVG) ${trend.toUpperCase()}`, c: trend === "bull" ? "#059669" : "#dc2626" });
   if (structureTrend && structureTrend === trend) reasons.push({ t: "STRUCTURE ALIGNED", c: "#0284c7" });
   if (lastBOS) reasons.push({ t: `BOS ${lastBOS.dir.toUpperCase()}`, c: lastBOS.dir === "bull" ? "#059669" : "#dc2626" });
