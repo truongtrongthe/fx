@@ -357,9 +357,9 @@ export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars, higherTFContex
   let signal = "WAIT";
   if (poi && (entryType === "limit" || entryType === "market")) {
     const rawDir = poi.direction === "long" ? "LONG" : "SHORT";
-    // H4/1H chỉ dùng để phân tích trend + POI — không ra lệnh vào.
+    // H4/1H: unmitigated FVG + BOS → cho phép bắn LIMIT ngay; liquidity (market) thì không.
     if (TREND_POI_TF_KEYS.includes(tfKey)) {
-      signal = "WAIT";
+      signal = entryType === "limit" ? rawDir : "WAIT";
     } else if (ENTRY_WATCH_TF_KEYS.includes(tfKey) && higherTFContext && higherTFContext.trend) {
       // M1/M5/M15 chỉ báo LONG/SHORT khi cùng chiều với trend H4/1H.
       if ((higherTFContext.trend === "bull" && rawDir === "LONG") || (higherTFContext.trend === "bear" && rawDir === "SHORT")) {
@@ -377,7 +377,9 @@ export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars, higherTFContex
   const tp2Price = signal === "LONG" ? P + tpD * 1.8 : P - tpD * 1.8;
 
   const reasons = [];
-  if (TREND_POI_TF_KEYS.includes(tfKey)) reasons.push({ t: "H4/1H → trend & POI only", c: "#64748b" });
+  if (TREND_POI_TF_KEYS.includes(tfKey)) {
+    reasons.push(signal !== "WAIT" ? { t: `LIMIT từ ${tfKey} (unmitigated FVG)`, c: "#0284c7" } : { t: "H4/1H → trend & POI only", c: "#64748b" });
+  }
   if (ENTRY_WATCH_TF_KEYS.includes(tfKey) && higherTFContext && higherTFContext.fromTf) reasons.push({ t: `TREND FROM ${higherTFContext.fromTf}`, c: "#0284c7" });
   if (trend) reasons.push({ t: `TREND (FVG) ${trend.toUpperCase()}`, c: trend === "bull" ? "#059669" : "#dc2626" });
   if (structureTrend && structureTrend === trend) reasons.push({ t: "STRUCTURE ALIGNED", c: "#0284c7" });

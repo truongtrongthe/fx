@@ -34,6 +34,7 @@ export default function RichAI() {
   const sigsRef  = useRef({});
   const alertTfRef = useRef(alertTimeframe);
   const barsRef = useRef(allBars);
+  const lastLimitAlertRef = useRef({ tf: null, limitPrice: null });
   useEffect(()=>{selTFRef.current=selTF;},[selTF]);
   useEffect(()=>{sigsRef.current=allSigs;},[allSigs]);
   useEffect(()=>{alertTfRef.current=alertTimeframe;},[alertTimeframe]);
@@ -83,7 +84,9 @@ export default function RichAI() {
       });
       setAllSigs(prev=>({...prev,...newSigs}));
       setExpertSigs(prev=>({...prev,...newExpertSigs}));
-      // Alert khi TF nhỏ (M1/M5/M15) bắn LONG/SHORT (đã align với H4/1H)
+      const LIMIT_SOURCE_TF_KEYS = ["4H", "1H", "30m"];
+      let alerted = false;
+      // 1) Alert khi TF nhỏ (M1/M5/M15) bắn LONG/SHORT
       for (const tfKey of ENTRY_WATCH_TF_KEYS) {
         const es = newExpertSigs[tfKey];
         if (es && (es.signal === "LONG" || es.signal === "SHORT")) {
@@ -97,7 +100,23 @@ export default function RichAI() {
           }
           setSignalAlert({ tf: tfKey, direction: es.signal, message: msg, price: es.price, timestamp: Date.now() });
           setTimeout(() => setSignalAlert(null), 8000);
+          alerted = true;
           break;
+        }
+      }
+      // 2) Nếu chưa alert: bắn khi 4H/1H/30m có LIMIT (unmitigated), tránh spam khi cùng tf + cùng limitPrice
+      if (!alerted) {
+        for (const tfKey of LIMIT_SOURCE_TF_KEYS) {
+          const es = newExpertSigs[tfKey];
+          if (es && (es.signal === "LONG" || es.signal === "SHORT") && es.entryType === "limit" && es.limitPrice != null) {
+            const last = lastLimitAlertRef.current;
+            if (last.tf !== tfKey || last.limitPrice !== es.limitPrice) {
+              lastLimitAlertRef.current = { tf: tfKey, limitPrice: es.limitPrice };
+              setSignalAlert({ tf: tfKey, direction: es.signal, message: `Đặt LIMIT từ ${tfKey} @ ${es.limitPrice}`, price: es.limitPrice, timestamp: Date.now() });
+              setTimeout(() => setSignalAlert(null), 8000);
+            }
+            break;
+          }
         }
       }
     },3000);
@@ -110,7 +129,6 @@ export default function RichAI() {
   const expertSig= expertSigs[selTF]||null;
   const displaySig = expertSig ? { ...sig, ...expertSig } : sig;
   const bars     = allBars[selTF]||[];
-  const sc       = displaySig.signal==="LONG"?"#059669":displaySig.signal==="SHORT"?"#dc2626":"#b45309";
   const B        = mtfBias({ ...allSigs, ...expertSigs });
   const wr       = stats.total?+(stats.wins/stats.total*100).toFixed(1):0;
 
@@ -118,12 +136,27 @@ export default function RichAI() {
   const htContext = getTrendAndPOIFromHigherTF(allBars);
   const htTrendLabel = htContext.trend === "bull" ? "BULL ↑" : htContext.trend === "bear" ? "BEAR ↓" : "—";
   const htFromTf = htContext.fromTf || "—";
-  // Tín hiệu điểm vào từ TF nhỏ (M1/M5/M15) — cái này alert user
+  // Tín hiệu điểm vào từ TF nhỏ (M1/M5/M15)
   const entrySignal = ENTRY_WATCH_TF_KEYS.map(k => ({ key: k, ex: expertSigs[k] })).find(
     ({ ex }) => ex && (ex.signal === "LONG" || ex.signal === "SHORT")
   );
+  // Primary signal: ưu tiên LIMIT từ 4H/1H/30m → entry M1/M5/M15 → selTF (để LIMIT không bị mất khi xem M5)
+  const LIMIT_SOURCE_TF_KEYS = ["4H", "1H", "30m"];
+  let primary = null;
+  for (const k of LIMIT_SOURCE_TF_KEYS) {
+    const ex = expertSigs[k];
+    if (ex && (ex.signal === "LONG" || ex.signal === "SHORT") && ex.entryType === "limit") {
+      primary = { sig: { ...(allSigs[k] || {}), ...ex }, fromTf: k };
+      break;
+    }
+  }
+  if (!primary && entrySignal) primary = { sig: { ...(allSigs[entrySignal.key] || {}), ...entrySignal.ex }, fromTf: entrySignal.key };
+  if (!primary) primary = { sig: displaySig, fromTf: selTF };
+  const primarySig = primary.sig;
+  const primaryTfDef = TIMEFRAMES.find(t => t.key === primary.fromTf) || tfDef;
   const isEntryTf = ENTRY_WATCH_TF_KEYS.includes(selTF);
   const isTrendTf = TREND_POI_TF_KEYS.includes(selTF);
+  const sc = primarySig.signal==="LONG"?"#059669":primarySig.signal==="SHORT"?"#dc2626":"#b45309";
 
   return(
     <>
@@ -246,30 +279,32 @@ export default function RichAI() {
             </div>
           </div>
 
-          <div style={{background:sc==="#059669"?"#ecfdf5":sc==="#dc2626"?"#fef2f2":"#fffbeb",border:`1px solid ${sc==="#059669"?"#a7f3d0":sc==="#dc2626"?"#fecaca":"#fde68a"}`,borderRadius:10,padding:"10px 18px",textAlign:"center",animation:displaySig.signal&&displaySig.signal!=="WAIT"?(displaySig.signal==="LONG"?"glowG 2s infinite":"glowR 2s infinite"):"none"}}>
-            <div className="rich-ai-signal-label" style={{fontSize:10,color:sc,letterSpacing:2,fontWeight:600}}>Tín hiệu từ {tfDef?.label}{isTrendTf ? " (xu hướng)" : isEntryTf ? " (điểm vào)" : ""}</div>
-            <div className="rich-ai-signal-value" style={{fontFamily:"'Bebas Neue'",fontSize:28,color:sc,letterSpacing:2}}>{displaySig.signal||"WAIT"}</div>
+          <div style={{background:sc==="#059669"?"#ecfdf5":sc==="#dc2626"?"#fef2f2":"#fffbeb",border:`1px solid ${sc==="#059669"?"#a7f3d0":sc==="#dc2626"?"#fecaca":"#fde68a"}`,borderRadius:10,padding:"10px 18px",textAlign:"center",animation:primarySig.signal&&primarySig.signal!=="WAIT"?(primarySig.signal==="LONG"?"glowG 2s infinite":"glowR 2s infinite"):"none"}}>
+            <div className="rich-ai-signal-label" style={{fontSize:10,color:sc,letterSpacing:2,fontWeight:600}}>
+              {primary.fromTf !== selTF ? `Tín hiệu từ ${primaryTfDef?.label}` : `Tín hiệu từ ${tfDef?.label}${isTrendTf ? " (xu hướng)" : isEntryTf ? " (điểm vào)" : ""}`}
+              {primarySig.entryType==="limit" ? " · LIMIT" : ""}
+            </div>
+            <div className="rich-ai-signal-value" style={{fontFamily:"'Bebas Neue'",fontSize:28,color:sc,letterSpacing:2}}>{primarySig.signal||"WAIT"}</div>
             <div className="rich-ai-signal-note" style={{fontSize:10,color:"#374151"}}>
-              {isEntryTf && htContext.trend && `Xu hướng ${htContext.trend.toUpperCase()} từ ${htFromTf} · `}
-              {expertSig?.entryType==="limit" ? `LIMIT @ ${expertSig.limitPrice}` : `Độ tin cậy ${displaySig.conf||0}%`}
+              {primarySig.entryType==="limit" ? `LIMIT @ ${primarySig.limitPrice}` : `Độ tin cậy ${primarySig.conf||0}%`}
             </div>
           </div>
 
-          {displaySig.signal&&displaySig.signal!=="WAIT"&&(
+          {primarySig.signal&&primarySig.signal!=="WAIT"&&(
             <div className="rich-ai-tp-sl" style={{fontSize:11,display:"flex",flexDirection:"column",gap:4}}>
-              {expertSig?.entryType==="limit"&&<div style={{background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:6,padding:"4px 10px"}}>
-                <span className="rich-ai-tp-sl-label" style={{color:"#374151",fontSize:10}}>LIMIT </span><span className="rich-ai-tp-sl-value" style={{color:"#0284c7",fontWeight:700}}>{expertSig.limitPrice}</span>
+              {primarySig.entryType==="limit"&&<div style={{background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:6,padding:"4px 10px"}}>
+                <span className="rich-ai-tp-sl-label" style={{color:"#374151",fontSize:10}}>LIMIT </span><span className="rich-ai-tp-sl-value" style={{color:"#0284c7",fontWeight:700}}>{primarySig.limitPrice}</span>
               </div>}
               <div style={{background:"#ecfdf5",border:"1px solid #a7f3d0",borderRadius:6,padding:"4px 10px"}}>
-                <span className="rich-ai-tp-sl-label" style={{color:"#374151",fontSize:10}}>TP1 </span><span className="rich-ai-tp-sl-value" style={{color:"#059669",fontWeight:700}}>{displaySig.tp1}</span><span style={{color:"#065f46",fontSize:10}}> +{displaySig.tpPips}p</span>
+                <span className="rich-ai-tp-sl-label" style={{color:"#374151",fontSize:10}}>TP1 </span><span className="rich-ai-tp-sl-value" style={{color:"#059669",fontWeight:700}}>{primarySig.tp1}</span><span style={{color:"#065f46",fontSize:10}}> +{primarySig.tpPips}p</span>
               </div>
               <div style={{background:"#ecfdf5",border:"1px solid #a7f3d0",borderRadius:6,padding:"4px 10px"}}>
-                <span className="rich-ai-tp-sl-label" style={{color:"#374151",fontSize:10}}>TP2 </span><span style={{color:"#059669",fontWeight:700,opacity:0.85}}>{displaySig.tp2}</span>
+                <span className="rich-ai-tp-sl-label" style={{color:"#374151",fontSize:10}}>TP2 </span><span style={{color:"#059669",fontWeight:700,opacity:0.85}}>{primarySig.tp2}</span>
               </div>
               <div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:6,padding:"4px 10px"}}>
-                <span className="rich-ai-tp-sl-label" style={{color:"#374151",fontSize:10}}>SL </span><span className="rich-ai-tp-sl-value" style={{color:"#dc2626",fontWeight:700}}>{displaySig.sl}</span><span style={{color:"#991b1b",fontSize:10}}> -{displaySig.slPips}p</span>
+                <span className="rich-ai-tp-sl-label" style={{color:"#374151",fontSize:10}}>SL </span><span className="rich-ai-tp-sl-value" style={{color:"#dc2626",fontWeight:700}}>{primarySig.sl}</span><span style={{color:"#991b1b",fontSize:10}}> -{primarySig.slPips}p</span>
               </div>
-              <div style={{fontSize:10,color:"#374151",textAlign:"right"}}>R:R 1:{tfDef?.rr}</div>
+              <div style={{fontSize:10,color:"#374151",textAlign:"right"}}>R:R 1:{primaryTfDef?.rr}</div>
             </div>
           )}
         </div>
@@ -335,9 +370,9 @@ export default function RichAI() {
               );
             })}
           </div>
-          {displaySig.signal && displaySig.signal !== "WAIT" && (
-            <div style={{fontSize:11,color:(displaySig.conf||0)>=68?"#059669":"#b45309",fontWeight:600,marginTop:2}}>
-              {tfDef?.label} độ tin cậy · {displaySig.conf?.toFixed(1) || 0}%
+          {primarySig.signal && primarySig.signal !== "WAIT" && (
+            <div style={{fontSize:11,color:(primarySig.conf||0)>=68?"#059669":"#b45309",fontWeight:600,marginTop:2}}>
+              {primaryTfDef?.label} độ tin cậy · {primarySig.conf?.toFixed(1) || 0}%
             </div>
           )}
         </div>

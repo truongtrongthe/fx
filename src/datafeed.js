@@ -2,7 +2,16 @@
  * Twelve Data feed for XAU/USD (gold): REST only for history (cached when possible),
  * WebSocket only for live price. No REST price polling.
  *
- * REST: history (time_series) when cache miss. WebSocket: wss://ws.twelvedata.com/v1/quotes/price.
+ * REST: history (time_series) when cache miss.
+ * WebSocket: wss://ws.twelvedata.com/v1/quotes/price (đúng theo tài liệu Twelve Data).
+ * Subscribe: { action: "subscribe", params: { symbols: "XAU/USD" } }.
+ *
+ * Lưu ý tần số cập nhật: Theo tài liệu Twelve Data, WebSocket push "real-time" nhưng tần số
+ * phụ thuộc plan (demo có thể bị throttle; nhiều nhà cung cấp forex/commodity không push từng tick
+ * mà gộp theo giây hoặc vài trăm ms). Nếu giá không nhảy nhanh, có thể do:
+ * - Gói demo/ Basic bị giới hạn tần số WebSocket.
+ * - Twelve Data quotes/price không phải feed tick-by-tick cho XAU/USD.
+ * Có thể cân nhắc fallback: poll REST /price mỗi 1–2s khi cần cập nhật nhanh hơn (tốn credit).
  */
 
 import { useState, useEffect } from "react";
@@ -163,11 +172,19 @@ export function useDataFeed() {
           if (cancelled) return;
           try {
             const msg = JSON.parse(event.data);
-            if (msg && typeof msg.price === "number" && Number.isFinite(msg.price)) {
-              applyPrice(msg.price, "ws");
+            if (!msg) return;
+            // Subscription status: { status: "ok", success: ["XAU/USD"], fails: [] } — bỏ qua
+            if (msg.status && msg.success) return;
+            // Giá: tài liệu mẫu là { timestamp, currency, symbol, price }; một số API dùng event_data hoặc close
+            const price = typeof msg.price === "number" ? msg.price
+              : (msg.event_data && typeof msg.event_data.price === "number") ? msg.event_data.price
+              : (typeof msg.close === "number") ? msg.close
+              : null;
+            if (price != null && Number.isFinite(price)) {
+              applyPrice(price, "ws");
             }
           } catch {
-            // ignore non-JSON or non-price messages
+            // ignore non-JSON or malformed
           }
         };
         ws.onclose = () => {
