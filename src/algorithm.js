@@ -140,7 +140,7 @@ export function mtfBias(sigs) {
 
 // ═══════════════════════════════════════════════════════════════════════
 //  EXPERT (SMC/ICT) — structure, POI, FVG, sweep, W-SHS
-//  H4/1H = trend + POI (cung/cầu). M1/M5 = canh điểm vào (entry watch).
+//  H4/1H = trend + POI (cung/cầu). M1/M5/M15 = canh điểm vào (entry watch).
 // ═══════════════════════════════════════════════════════════════════════
 const PIVOT_LEFT = 2, PIVOT_RIGHT = 2;
 export const MIN_BARS_EXPERT = 35;
@@ -148,7 +148,7 @@ export const MIN_BARS_EXPERT = 35;
 /** TFs used to determine trend and supply/demand (POI). */
 export const TREND_POI_TF_KEYS = ["4H", "1H"];
 /** TFs used to watch for entry (signal only when aligned with HTF trend). */
-export const ENTRY_WATCH_TF_KEYS = ["1m", "5m"];
+export const ENTRY_WATCH_TF_KEYS = ["1m", "5m", "15m"];
 
 function getSwingHighs(bars, n = 8) {
   if (!bars || bars.length < PIVOT_LEFT + PIVOT_RIGHT + 1) return [];
@@ -361,7 +361,7 @@ export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars, higherTFContex
     if (TREND_POI_TF_KEYS.includes(tfKey)) {
       signal = "WAIT";
     } else if (ENTRY_WATCH_TF_KEYS.includes(tfKey) && higherTFContext && higherTFContext.trend) {
-      // M1/M5 chỉ báo LONG/SHORT khi cùng chiều với trend H4/1H.
+      // M1/M5/M15 chỉ báo LONG/SHORT khi cùng chiều với trend H4/1H.
       if ((higherTFContext.trend === "bull" && rawDir === "LONG") || (higherTFContext.trend === "bear" && rawDir === "SHORT")) {
         signal = rawDir;
       }
