@@ -387,6 +387,23 @@ export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars, higherTFContex
   if (sweepDetected) reasons.push({ t: "Sweep", c: "#b45309" });
   if (wOrShsOnLowerTF) reasons.push({ t: "W/SHS", c: "#059669" });
 
+  // FVG / Imbalance (cùng nghĩa): danh sách zone mất cân bằng cho UI
+  const fvgList = fvgs.slice(-10).map((z) => ({
+    type: z.type,
+    zone: [z.zone[0], z.zone[1]],
+    mitigated: isZoneMitigated(bars, z.zone, z.type, z.barIndex + 3),
+  })).reverse();
+  // Vùng dẫn dụ (Inducement): vùng liquidity bị sweep trước khi giá đảo chiều — tính cho mọi TF khi có sweep
+  const lastSH = swingHighs.length ? swingHighs[swingHighs.length - 1] : null;
+  const lastSL = swingLows.length ? swingLows[swingLows.length - 1] : null;
+  let inducement = null;
+  if (lastSL && detectSweep(bars, lastSL.price, "bull")) {
+    inducement = { zone: [lastSL.price - 2, lastSL.price + 2], direction: "long" };
+  } else if (lastSH && detectSweep(bars, lastSH.price, "bear")) {
+    inducement = { zone: [lastSH.price - 2, lastSH.price + 2], direction: "short" };
+  }
+  if (inducement) reasons.push({ t: "Inducement (vùng dẫn dụ)", c: "#7c3aed" });
+
   return {
     trend,
     lastBOS,
@@ -395,6 +412,8 @@ export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars, higherTFContex
     limitPrice: limitPrice != null ? +limitPrice.toFixed(2) : null,
     sweepDetected,
     wOrShsOnLowerTF,
+    fvgList,
+    inducement,
     signal,
     price: +P.toFixed(2),
     sl: +(slPrice).toFixed(2),
