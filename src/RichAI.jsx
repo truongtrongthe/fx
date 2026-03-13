@@ -98,7 +98,13 @@ export default function RichAI() {
           } else if (es.poi?.type === "liquidity") {
             msg = "Liquidity POI";
           }
-          setSignalAlert({ tf: tfKey, direction: es.signal, message: msg, price: es.price, timestamp: Date.now() });
+          setSignalAlert({
+            tf: tfKey,
+            direction: es.signal,
+            message: msg,
+            price: es.entryType === "limit" ? es.limitPrice : es.price,
+            timestamp: Date.now()
+          });
           setTimeout(() => setSignalAlert(null), 8000);
           alerted = true;
           break;
@@ -326,7 +332,7 @@ export default function RichAI() {
               <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                 <span className="rich-ai-section-value" style={{fontSize:15,fontWeight:700,color:entrySignal.ex.signal==="LONG"?"#059669":"#dc2626"}}>{entrySignal.ex.signal}</span>
                 <span style={{fontSize:11,color:"#374151"}}>từ {entrySignal.key}</span>
-                <span style={{fontSize:11,color:"#5c5c5c"}}>@ {entrySignal.ex.price}</span>
+                <span style={{fontSize:11,color:"#5c5c5c"}}>@ {entrySignal.ex.entryType === "limit" ? entrySignal.ex.limitPrice : entrySignal.ex.price}</span>
               </div>
             ) : (
               <div style={{fontSize:12,color:"#64748b"}}>Chờ tín hiệu từ M1 / M5 / M15</div>

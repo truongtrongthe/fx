@@ -385,9 +385,11 @@ export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars, higherTFContex
 
   const cfg = getAlgorithmConfig();
   const slD = A * cfg.atrSlMultiplier, tpD = slD * tfDef.rr;
-  const slPrice = signal === "LONG" ? P - slD : P + slD;
-  const tp1Price = signal === "LONG" ? P + tpD : P - tpD;
-  const tp2Price = signal === "LONG" ? P + tpD * 1.8 : P - tpD * 1.8;
+  // LIMIT setups must anchor risk/reward to the planned entry, not the live price.
+  const entryPrice = entryType === "limit" && limitPrice != null ? limitPrice : P;
+  const slPrice = signal === "LONG" ? entryPrice - slD : entryPrice + slD;
+  const tp1Price = signal === "LONG" ? entryPrice + tpD : entryPrice - tpD;
+  const tp2Price = signal === "LONG" ? entryPrice + tpD * 1.8 : entryPrice - tpD * 1.8;
 
   const reasons = [];
   if (TREND_POI_TF_KEYS.includes(tfKey)) {
@@ -424,6 +426,7 @@ export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars, higherTFContex
     lastBOS,
     poi,
     entryType,
+    entryPrice: +entryPrice.toFixed(2),
     limitPrice: limitPrice != null ? +limitPrice.toFixed(2) : null,
     sweepDetected,
     wOrShsOnLowerTF,
