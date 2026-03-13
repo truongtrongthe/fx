@@ -141,6 +141,11 @@ export function mtfBias(sigs) {
 // ═══════════════════════════════════════════════════════════════════════
 //  EXPERT (SMC/ICT) — structure, POI, FVG, sweep, W-SHS
 //  H4/1H = trend + POI (cung/cầu). M1/M5/M15 = canh điểm vào (entry watch).
+//
+//  VALIDATION: Structure by closed TF; signal/display uses current price where needed.
+//  - Structure (pivots, BOS, FVG, trend, POI, limit, sweep, W/SHS): closed bars only.
+//  - Current price (P, full bars): SL/TP display, isZoneMitigated (zone filled?), ATR.
+//  - Entry signal LONG/SHORT: derived from closed-bar structure; updates at TF close.
 // ═══════════════════════════════════════════════════════════════════════
 const PIVOT_LEFT = 2, PIVOT_RIGHT = 2;
 export const MIN_BARS_EXPERT = 35;
@@ -256,6 +261,7 @@ function detectWOrSHS(bars, direction) {
 
 /**
  * Trend + POI from H4 then 1H. Used so M1/M5 only signal when aligned with HTF.
+ * Structure và limit chỉ xây trên nến đã đóng (closed bars).
  * @param {Record<string, import('./datafeed.js').Bar[]>} allBars - Bars keyed by tf key (e.g. "4H", "1H").
  * @returns {{ trend: 'bull'|'bear'|null, poi: { zone: number[], type: string, direction: 'long'|'short' }|null, lastBOS: object|null, fromTf: string|null }}
  */
@@ -263,12 +269,14 @@ export function getTrendAndPOIFromHigherTF(allBars) {
   const out = { trend: null, poi: null, lastBOS: null, fromTf: null };
   for (const tfKey of TREND_POI_TF_KEYS) {
     const bars = allBars && allBars[tfKey];
-    if (!bars || bars.length < MIN_BARS_EXPERT) continue;
-    const swingHighs = getSwingHighs(bars);
-    const swingLows = getSwingLows(bars);
+    if (!bars || bars.length < 2) continue;
+    const closedBars = bars.slice(0, -1);
+    if (closedBars.length < MIN_BARS_EXPERT) continue;
+    const swingHighs = getSwingHighs(closedBars);
+    const swingLows = getSwingLows(closedBars);
     const structureTrend = getTrendFromStructure(swingHighs, swingLows);
-    const lastBOS = detectBOS(bars, swingHighs, swingLows);
-    const fvgs = findFVG(bars);
+    const lastBOS = detectBOS(closedBars, swingHighs, swingLows);
+    const fvgs = findFVG(closedBars);
     const fvgTrend = getTrendFromFVG(fvgs);
     const trend = fvgTrend || structureTrend;
     if (!trend || !lastBOS || lastBOS.dir !== trend || !fvgs.length) continue;
@@ -302,12 +310,15 @@ export function getTrendAndPOIFromHigherTF(allBars) {
 }
 
 export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars, higherTFContext = null) {
-  if (!bars || bars.length < MIN_BARS_EXPERT || !tfDef) return null;
-  const swingHighs = getSwingHighs(bars);
-  const swingLows = getSwingLows(bars);
+  if (!bars || bars.length < 2 || !tfDef) return null;
+  const closedBars = bars.slice(0, -1);
+  if (closedBars.length < MIN_BARS_EXPERT) return null;
+  // Structure, BOS, FVG, POI, limit chỉ từ nến đã đóng — không đổi mỗi tick
+  const swingHighs = getSwingHighs(closedBars);
+  const swingLows = getSwingLows(closedBars);
   const structureTrend = getTrendFromStructure(swingHighs, swingLows);
-  const lastBOS = detectBOS(bars, swingHighs, swingLows);
-  const fvgs = findFVG(bars);
+  const lastBOS = detectBOS(closedBars, swingHighs, swingLows);
+  const fvgs = findFVG(closedBars);
   const fvgTrend = getTrendFromFVG(fvgs);
   const trend = fvgTrend || structureTrend;
   const P = bars[bars.length - 1].c;
@@ -319,9 +330,11 @@ export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars, higherTFContex
   let sweepDetected = false;
   let wOrShsOnLowerTF = false;
 
-  // POI chỉ được kích hoạt khi:
+  // POI chỉ được kích hoạt khi (trên closed bars):
   // 1) Có phá cấu trúc (BOS) cùng chiều xu hướng chính
   // 2) Có FVG tạo ra (mất cân bằng)
+  // isZoneMitigated dùng full bars để biết giá đã chạm zone kể cả nến hiện tại
+  const closedLowerTf = lowerTfBars && lowerTfBars.length > 1 ? lowerTfBars.slice(0, -1) : lowerTfBars;
   if (lastBOS && trend && lastBOS.dir === trend && fvgs.length) {
     const lastSH = swingHighs[swingHighs.length - 1];
     const lastSL = swingLows[swingLows.length - 1];
@@ -334,8 +347,8 @@ export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars, higherTFContex
         limitPrice = (z.zone[0] + z.zone[1]) / 2;
       } else {
         poi = { zone: [lastSL.price - 2, lastSL.price + 2], type: "liquidity", direction: "long" };
-        sweepDetected = detectSweep(bars, lastSL.price, "bull");
-        wOrShsOnLowerTF = lowerTfBars && detectWOrSHS(lowerTfBars, "long");
+        sweepDetected = detectSweep(closedBars, lastSL.price, "bull");
+        wOrShsOnLowerTF = closedLowerTf && closedLowerTf.length >= 15 && detectWOrSHS(closedLowerTf, "long");
         entryType = sweepDetected && wOrShsOnLowerTF ? "market" : null;
       }
     } else {
@@ -347,8 +360,8 @@ export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars, higherTFContex
         limitPrice = (z.zone[0] + z.zone[1]) / 2;
       } else {
         poi = { zone: [lastSH.price - 2, lastSH.price + 2], type: "liquidity", direction: "short" };
-        sweepDetected = detectSweep(bars, lastSH.price, "bear");
-        wOrShsOnLowerTF = lowerTfBars && detectWOrSHS(lowerTfBars, "short");
+        sweepDetected = detectSweep(closedBars, lastSH.price, "bear");
+        wOrShsOnLowerTF = closedLowerTf && closedLowerTf.length >= 15 && detectWOrSHS(closedLowerTf, "short");
         entryType = sweepDetected && wOrShsOnLowerTF ? "market" : null;
       }
     }
@@ -399,9 +412,9 @@ export function computeExpertSig(bars, tfKey, tfDef, lowerTfBars, higherTFContex
   const lastSH = swingHighs.length ? swingHighs[swingHighs.length - 1] : null;
   const lastSL = swingLows.length ? swingLows[swingLows.length - 1] : null;
   let inducement = null;
-  if (lastSL && detectSweep(bars, lastSL.price, "bull")) {
+  if (lastSL && detectSweep(closedBars, lastSL.price, "bull")) {
     inducement = { zone: [lastSL.price - 2, lastSL.price + 2], direction: "long" };
-  } else if (lastSH && detectSweep(bars, lastSH.price, "bear")) {
+  } else if (lastSH && detectSweep(closedBars, lastSH.price, "bear")) {
     inducement = { zone: [lastSH.price - 2, lastSH.price + 2], direction: "short" };
   }
   if (inducement) reasons.push({ t: "Inducement (vùng dẫn dụ)", c: "#7c3aed" });

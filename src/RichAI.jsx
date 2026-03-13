@@ -283,6 +283,7 @@ export default function RichAI() {
             <div className="rich-ai-signal-label" style={{fontSize:10,color:sc,letterSpacing:2,fontWeight:600}}>
               {primary.fromTf !== selTF ? `Tín hiệu từ ${primaryTfDef?.label}` : `Tín hiệu từ ${tfDef?.label}${isTrendTf ? " (xu hướng)" : isEntryTf ? " (điểm vào)" : ""}`}
               {primarySig.entryType==="limit" ? " · LIMIT" : ""}
+              {(primarySig.entryType==="limit" || isTrendTf) && primary.fromTf !== "1m" && primary.fromTf !== "5m" && primary.fromTf !== "15m" ? " · nến đã đóng" : isEntryTf && entrySignal?.key === primary.fromTf ? " · khi đóng nến" : ""}
             </div>
             <div className="rich-ai-signal-value" style={{fontFamily:"'Bebas Neue'",fontSize:28,color:sc,letterSpacing:2}}>{primarySig.signal||"WAIT"}</div>
             <div className="rich-ai-signal-note" style={{fontSize:10,color:"#374151"}}>
@@ -317,7 +318,7 @@ export default function RichAI() {
               <span className="rich-ai-section-value" style={{fontSize:15,fontWeight:700,color:htContext.trend==="bull"?"#059669":htContext.trend==="bear"?"#dc2626":"#64748b"}}>{htTrendLabel}</span>
               <span style={{fontSize:11,color:"#374151"}}>từ {htFromTf}</span>
             </div>
-            <div className="rich-ai-section-note" style={{fontSize:10,color:"#64748b",marginTop:4}}>Chỉ vào lệnh khi TF nhỏ (M1/M5/M15) bắn tín hiệu cùng chiều.</div>
+            <div className="rich-ai-section-note" style={{fontSize:10,color:"#64748b",marginTop:4}}>Structure & limit từ nến đã đóng (chỉ đổi khi đóng nến TF). Chỉ vào lệnh khi TF nhỏ bắn tín hiệu cùng chiều.</div>
           </div>
           <div style={{flex:"1 1 200px",minWidth:0,borderLeft:"1px solid #e2e8f0",paddingLeft:12}}>
             <div className="rich-ai-section-title" style={{fontSize:10,color:"#64748b",letterSpacing:1.5,marginBottom:4}}>Điểm vào (TF nhỏ bắn tín hiệu)</div>
@@ -330,7 +331,7 @@ export default function RichAI() {
             ) : (
               <div style={{fontSize:12,color:"#64748b"}}>Chờ tín hiệu từ M1 / M5 / M15</div>
             )}
-            <div className="rich-ai-section-note" style={{fontSize:10,color:"#64748b",marginTop:4}}>Khi có LONG/SHORT từ M1/M5/M15 (cùng chiều xu hướng) → cảnh báo điểm vào.</div>
+            <div className="rich-ai-section-note" style={{fontSize:10,color:"#64748b",marginTop:4}}>M1/M5/M15 đánh giá khi đóng nến (tối đa mỗi 1m/5m/15m). Cùng chiều xu hướng → cảnh báo điểm vào.</div>
           </div>
         </div>
 
@@ -411,7 +412,8 @@ export default function RichAI() {
             <div className="rich-ai-panel" style={{background:"#ffffff",border:"1px solid #dde0e4",borderRadius:10,padding:"14px 16px",flex:1}}>
 
               {tab==="indicators"&&<div>
-                <div className="rich-ai-panel-title" style={{fontSize:13,color:"#374151",letterSpacing:1,marginBottom:10}}>Chỉ báo · {tfDef?.label}</div>
+                <div className="rich-ai-panel-title" style={{fontSize:13,color:"#374151",letterSpacing:1,marginBottom:4}}>Chỉ báo · {tfDef?.label}</div>
+                <div className="rich-ai-panel-note" style={{fontSize:10,color:"#64748b",marginBottom:10}}>Cập nhật theo nến hiện tại (realtime).</div>
                 <div className="rich-ai-indicators-grid" style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
                   {[
                     ["RSI (14)",sig.rsi,sig.rsi<30?"→ OVERSOLD":sig.rsi>70?"→ OVERBOUGHT":"→ NEUTRAL",sig.rsi<30?"#059669":sig.rsi>70?"#dc2626":"#b45309"],
@@ -444,8 +446,8 @@ export default function RichAI() {
               </div>}
 
               {tab==="poi"&&<div>
-                <div className="rich-ai-panel-title" style={{fontSize:13,color:"#374151",letterSpacing:1,marginBottom:6}}>POI / Expert · Structure, BOS, FVG, Inducement</div>
-                <div className="rich-ai-panel-note" style={{fontSize:11,color:"#64748b",marginBottom:12}}>TF lớn (H4, 1H) quyết định xu hướng; TF nhỏ (M1, M5, M15) bắn tín hiệu điểm vào khi cùng chiều.</div>
+                <div className="rich-ai-panel-title" style={{fontSize:13,color:"#374151",letterSpacing:1,marginBottom:4}}>POI / Expert · Structure, BOS, FVG, Inducement</div>
+                <div className="rich-ai-panel-note" style={{fontSize:11,color:"#64748b",marginBottom:12}}>Structure, BOS, FVG & limit chỉ từ nến đã đóng (cập nhật khi đóng nến từng TF). Entry M1/M5/M15 đánh giá khi đóng nến. TF lớn quyết định xu hướng; TF nhỏ bắn tín hiệu khi cùng chiều.</div>
                 <div style={{display:"flex",flexDirection:"column",gap:10}}>
                   {[
                     { title: "Xu hướng (H4, 1H)", keys: TREND_POI_TF_KEYS },
