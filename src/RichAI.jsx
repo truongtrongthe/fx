@@ -263,16 +263,19 @@ export default function RichAI() {
           .rich-ai-alert .rich-ai-alert-detail{font-size:var(--fs-sm) !important}
           .rich-ai-price-row > div{border-left:none !important;padding-left:0 !important}
         }
+        .rich-ai-limit-tf-grid{grid-template-columns:repeat(auto-fit,minmax(170px,1fr));width:100%;min-width:0}
+        .rich-ai-limit-card{min-width:0;overflow:hidden}
+        .rich-ai-limit-card *{min-width:0;overflow-wrap:anywhere}
         @media (max-width: 900px) {
           .rich-ai-root{max-width:100%}
           .rich-ai-header{flex-direction:column;align-items:flex-start}
           .rich-ai-main-grid{display:flex;flex-direction:column;gap:12px}
           .rich-ai-left{width:100%;min-width:0}
           .rich-ai-indicators-grid{grid-template-columns:repeat(2,1fr)}
-          .rich-ai-limit-tf-grid{grid-template-columns:repeat(3,minmax(90px,1fr))}
+          .rich-ai-limit-tf-grid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
         }
         @media (max-width: 430px) {
-          .rich-ai-limit-tf-grid{grid-template-columns:repeat(2,minmax(100px,1fr))}
+          .rich-ai-limit-tf-grid{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
         }
       `}</style>
       <div className="rich-ai-root" style={{fontFamily:"'IBM Plex Mono',monospace",background:"#f5f5f5",minHeight:"100vh",color:"#1a1a1a",padding:"var(--pad, 10px)",display:"flex",flexDirection:"column",gap:"var(--gap, 8px)",maxWidth:1260,margin:"0 auto"}}>
@@ -327,7 +330,7 @@ export default function RichAI() {
         {/* Limit theo khung thời gian (one per TF: 1M, 5M, 15M, 30M, 1H, 4H); alerts shown inside each card */}
         <div style={{background:"#ffffff",border:"1px solid #dde0e4",borderRadius:10,padding:"12px 14px"}}>
           <div style={{fontSize:11,color:"#64748b",fontWeight:600,letterSpacing:1,marginBottom:8}}>Limit theo khung thời gian</div>
-          <div className="rich-ai-limit-tf-grid" style={{display:"grid",gridTemplateColumns:"repeat(6,minmax(100px,1fr))",gap:8,alignItems:"stretch"}}>
+          <div className="rich-ai-limit-tf-grid" style={{display:"grid",gap:8,alignItems:"stretch"}}>
             {LIMIT_TF_KEYS.map((tfKey)=>{
               const t=TIMEFRAMES.find(x=>x.key===tfKey);
               const plan=savedLimits.find((p)=>p.status==="active"&&p.tf===tfKey);
@@ -335,7 +338,7 @@ export default function RichAI() {
               const reachedHere=limitReachedTf===tfKey;
               const cancelledHere=limitCancelledTf===tfKey;
               return (
-                <div key={tfKey} className="rich-ai-limit-card" style={{position:"relative",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:8,padding:"10px 12px",fontSize:11,display:"flex",flexDirection:"column",gap:6,minHeight:100,minWidth:0,overflow:"visible"}}>
+                <div key={tfKey} className="rich-ai-limit-card" style={{position:"relative",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:8,padding:"10px 12px",fontSize:11,display:"flex",flexDirection:"column",gap:6,minHeight:100,minWidth:0,overflow:"hidden"}}>
                   {entryAlertHere&&(
                     <div style={{position:"absolute",top:6,right:6,zIndex:2,fontSize:10,fontWeight:600,color:signalAlert.direction==="LONG"?"#059669":"#dc2626",background:signalAlert.direction==="LONG"?"#ecfdf5":"#fef2f2",border:"1px solid "+(signalAlert.direction==="LONG"?"#a7f3d0":"#fecaca"),borderRadius:6,padding:"4px 8px",boxShadow:"0 1px 3px rgba(0,0,0,0.08)"}}>Điểm vào: {signalAlert.direction}</div>
                   )}
