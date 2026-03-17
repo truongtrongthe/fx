@@ -16,6 +16,7 @@
 
 import { useState, useEffect } from "react";
 import { TIMEFRAMES } from "./algorithm.js";
+import { fetchBarsFromDb, upsertBarsToDb } from "./barsDb.js";
 
 // ═══════════════════════════════════════════════════════════════════════
 //  CONFIG
@@ -29,9 +30,12 @@ const MAX_BARS_PER_TF = 150;
 const HISTORY_REQUEST_DELAY_MS = 8_000;
 const WS_RECONNECT_DELAY_MS = 5_000;
 
-/** History cache: reload within TTL uses cache and skips API calls */
+/** History cache: reload within TTL uses cache and skips API calls (fallback when DB miss) */
 const CACHE_KEY_PREFIX = "richai_hist_";
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+/** Min bars from DB to skip API; and "recent" = latest bar within this many bar-periods of now */
+const MIN_BARS_FROM_DB = 25;
+const MAX_BAR_AGE_PERIODS = 2;
 
 const getApiKey = () =>
   typeof import.meta !== "undefined" && import.meta.env?.VITE_TWELVEDATA_API_KEY
@@ -209,21 +213,37 @@ export function useDataFeed() {
 
     async function init() {
       try {
-        // 1) Load historical candles: use cache when valid, else fetch (rate-limited)
+        // 1) Load historical candles: DB first, then cache, then API (rate-limited)
         let lastWasFetch = false;
         for (let i = 0; i < TIMEFRAMES.length; i++) {
           if (cancelled) return;
           const tf = TIMEFRAMES[i];
-          const cached = getCachedBars(tf.key);
-          if (cached != null) {
-            setAllBars((prev) => ({ ...prev, [tf.key]: cached }));
+          const now = Date.now();
+          const maxAge = tf.ms * MAX_BAR_AGE_PERIODS;
+
+          let bars = null;
+          const fromDb = await fetchBarsFromDb(XAUUSD_SYMBOL, tf.key, MAX_BARS_PER_TF);
+          if (fromDb.length >= MIN_BARS_FROM_DB) {
+            const latestT = fromDb[fromDb.length - 1].t;
+            if (now - latestT <= maxAge) {
+              bars = fromDb;
+            }
+          }
+          if (bars == null) {
+            const cached = getCachedBars(tf.key);
+            if (cached != null) bars = cached;
+          }
+          if (bars != null) {
+            setAllBars((prev) => ({ ...prev, [tf.key]: bars }));
             lastWasFetch = false;
             continue;
           }
+
           try {
-            const bars = await fetchHistoryForTf(tf);
+            bars = await fetchHistoryForTf(tf);
             if (cancelled) return;
             setCachedBars(tf.key, bars);
+            await upsertBarsToDb(XAUUSD_SYMBOL, tf.key, bars);
             setAllBars((prev) => ({ ...prev, [tf.key]: bars }));
             lastWasFetch = true;
           } catch (e) {

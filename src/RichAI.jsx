@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import {
   TIMEFRAMES,
   computeSig,
-  mtfBias,
   computeExpertSig,
   getTrendAndPOIFromHigherTF,
   TREND_POI_TF_KEYS,
@@ -11,6 +10,7 @@ import {
 } from "./algorithm.js";
 import { useDataFeed } from "./datafeed.js";
 import { AlgorithmSettingsPanel } from "./AlgorithmSettingsPanel.jsx";
+import { fetchLimitPlans, updateLimitPlan, LIMIT_TF_KEYS, upsertLimitForTf } from "./limitPlans.js";
 
 // ═══════════════════════════════════════════════════════════════════════
 //  MAIN APP
@@ -29,16 +29,29 @@ export default function RichAI() {
   const [signalAlert, setSignalAlert] = useState(null);
   const [configVersion, setConfigVersion] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [savedLimits, setSavedLimits] = useState([]);
+  const [limitReachedTf, setLimitReachedTf] = useState(null);
+  const [limitCancelledTf, setLimitCancelledTf] = useState(null);
 
   const selTFRef = useRef(selTF);
   const sigsRef  = useRef({});
   const alertTfRef = useRef(alertTimeframe);
   const barsRef = useRef(allBars);
   const lastLimitAlertRef = useRef({ tf: null, limitPrice: null });
+  const lastEntryLimitInRangeRef = useRef({ tf: null, limitPrice: null });
+  const livePriceRef = useRef(livePrice);
+  const savedLimitsRef = useRef(savedLimits);
   useEffect(()=>{selTFRef.current=selTF;},[selTF]);
   useEffect(()=>{sigsRef.current=allSigs;},[allSigs]);
   useEffect(()=>{alertTfRef.current=alertTimeframe;},[alertTimeframe]);
   useEffect(()=>{barsRef.current=allBars;},[allBars]);
+  useEffect(()=>{livePriceRef.current=livePrice;},[livePrice]);
+  useEffect(()=>{savedLimitsRef.current=savedLimits;},[savedLimits]);
+
+  // Load saved limit plans on mount
+  useEffect(() => {
+    fetchLimitPlans().then(setSavedLimits);
+  }, []);
 
   // ── Initial + periodic signal recompute (indicator + expert); recompute when LLM updates config ──
   useEffect(() => {
@@ -85,32 +98,42 @@ export default function RichAI() {
       setAllSigs(prev=>({...prev,...newSigs}));
       setExpertSigs(prev=>({...prev,...newExpertSigs}));
       const LIMIT_SOURCE_TF_KEYS = ["4H", "1H", "30m"];
+      const lp = livePriceRef.current;
+      const bid = lp && (lp.bid != null || lp.mid != null) ? (lp.bid ?? lp.mid) : null;
+      const ask = lp && (lp.ask != null || lp.mid != null) ? (lp.ask ?? lp.mid) : null;
       let alerted = false;
-      // 1) Alert khi TF nhỏ (M1/M5/M15) bắn LONG/SHORT
-      for (const tfKey of ENTRY_WATCH_TF_KEYS) {
+      // 1) Entry alert: all entry TFs (1m, 5m, 15m, 30m, 1H, 4H). Market → alert now; Limit → alert only when price in range + plan solid
+      for (const tfKey of LIMIT_TF_KEYS) {
         const es = newExpertSigs[tfKey];
-        if (es && (es.signal === "LONG" || es.signal === "SHORT")) {
+        if (!es || (es.signal !== "LONG" && es.signal !== "SHORT")) continue;
+        if (es.entryType === "market") {
           let msg = "Setup";
-          if (es.entryType === "limit" && es.poi?.type === "unmitigated") {
-            msg = `FVG LIMIT @ ${es.limitPrice}`;
-          } else if (es.entryType === "market" && es.poi?.type === "liquidity" && es.sweepDetected && es.wOrShsOnLowerTF) {
-            msg = "Sweep + W/SHS";
-          } else if (es.poi?.type === "liquidity") {
-            msg = "Liquidity POI";
-          }
-          setSignalAlert({
-            tf: tfKey,
-            direction: es.signal,
-            message: msg,
-            price: es.entryType === "limit" ? es.limitPrice : es.price,
-            timestamp: Date.now()
-          });
+          if (es.poi?.type === "unmitigated") msg = `FVG @ ${es.price}`;
+          else if (es.poi?.type === "liquidity" && es.sweepDetected && es.wOrShsOnLowerTF) msg = "Sweep + W/SHS";
+          else if (es.poi?.type === "liquidity") msg = "Liquidity POI";
+          setSignalAlert({ tf: tfKey, direction: es.signal, message: msg, price: es.price, timestamp: Date.now() });
           setTimeout(() => setSignalAlert(null), 8000);
           alerted = true;
           break;
         }
+        if (es.entryType === "limit" && es.limitPrice != null) {
+          const limitPrice = es.limitPrice;
+          const inRange = bid != null && ask != null &&
+            (es.signal === "LONG" ? bid <= limitPrice : ask >= limitPrice);
+          const lastInRange = lastEntryLimitInRangeRef.current;
+          const alreadyAlertedForThis = lastInRange.tf === tfKey && lastInRange.limitPrice === limitPrice;
+          if (inRange && !alreadyAlertedForThis) {
+            lastEntryLimitInRangeRef.current = { tf: tfKey, limitPrice };
+            const msg = es.poi?.type === "unmitigated" ? `FVG LIMIT @ ${limitPrice}` : `LIMIT @ ${limitPrice}`;
+            setSignalAlert({ tf: tfKey, direction: es.signal, message: msg, price: limitPrice, timestamp: Date.now() });
+            setTimeout(() => setSignalAlert(null), 8000);
+            alerted = true;
+            break;
+          }
+          if (!inRange) lastEntryLimitInRangeRef.current = { tf: null, limitPrice: null };
+        }
       }
-      // 2) Nếu chưa alert: bắn khi 4H/1H/30m có LIMIT (unmitigated), tránh spam khi cùng tf + cùng limitPrice
+      // 2) If no entry alert: notify "place limit" for 4H/1H/30m when they have limit (price not in range yet)
       if (!alerted) {
         for (const tfKey of LIMIT_SOURCE_TF_KEYS) {
           const es = newExpertSigs[tfKey];
@@ -125,9 +148,47 @@ export default function RichAI() {
           }
         }
       }
-    },3000);
-    return()=>clearInterval(id);
-  },[]);
+
+      // 2b) Auto-save limit per TF when algorithm shows a limit (current price driven)
+      const plansRef = savedLimitsRef.current || [];
+      for (const tfKey of LIMIT_TF_KEYS) {
+        const es = newExpertSigs[tfKey];
+        if (!es || (es.signal !== "LONG" && es.signal !== "SHORT") || es.entryType !== "limit" || es.limitPrice == null) continue;
+        const existing = plansRef.find((p) => p.status === "active" && p.tf === tfKey);
+        if (existing && existing.direction === es.signal && Math.abs(Number(existing.limit_price) - es.limitPrice) < 0.01) continue;
+        upsertLimitForTf(tfKey, { direction: es.signal, limit_price: es.limitPrice, tp1: es.tp1, tp2: es.tp2, sl: es.sl }).then(() => fetchLimitPlans().then(setSavedLimits));
+      }
+
+      // 3) Saved limit plans: reach check + auto-close when setup no longer valid
+      const plans = savedLimitsRef.current || [];
+      const activePlans = plans.filter((p) => p.status === "active");
+      if (lp != null && bid != null && ask != null && activePlans.length > 0) {
+        for (const plan of activePlans) {
+          const limitPrice = Number(plan.limit_price);
+          const reached =
+            plan.direction === "LONG" ? bid <= limitPrice : ask >= limitPrice;
+          if (reached) {
+            setLimitReachedTf(plan.tf);
+            setTimeout(() => setLimitReachedTf(null), 8000);
+            updateLimitPlan(plan.id, { status: "filled" }).then(() => fetchLimitPlans().then(setSavedLimits));
+            continue;
+          }
+          const ex = newExpertSigs[plan.tf];
+          const stillValid =
+            ex &&
+            ex.entryType === "limit" &&
+            ex.signal === plan.direction &&
+            Math.abs((ex.limitPrice ?? 0) - limitPrice) < 0.5;
+          if (!stillValid) {
+            setLimitCancelledTf(plan.tf);
+            setTimeout(() => setLimitCancelledTf(null), 6000);
+            updateLimitPlan(plan.id, { status: "cancelled" }).then(() => fetchLimitPlans().then(setSavedLimits));
+          }
+        }
+      }
+    }, 3000);
+    return () => clearInterval(id);
+  }, []);
 
   // ── Derived (expert = primary signal; indicator = confluence in tab) ─────────────────
   const tfDef    = TIMEFRAMES.find(t=>t.key===selTF);
@@ -135,18 +196,13 @@ export default function RichAI() {
   const expertSig= expertSigs[selTF]||null;
   const displaySig = expertSig ? { ...sig, ...expertSig } : sig;
   const bars     = allBars[selTF]||[];
-  const B        = mtfBias({ ...allSigs, ...expertSigs });
   const wr       = stats.total?+(stats.wins/stats.total*100).toFixed(1):0;
 
-  // Xu hướng từ TF lớn (H4/1H) — dùng để giải thích cho user
-  const htContext = getTrendAndPOIFromHigherTF(allBars);
-  const htTrendLabel = htContext.trend === "bull" ? "BULL ↑" : htContext.trend === "bear" ? "BEAR ↓" : "—";
-  const htFromTf = htContext.fromTf || "—";
-  // Tín hiệu điểm vào từ TF nhỏ (M1/M5/M15)
-  const entrySignal = ENTRY_WATCH_TF_KEYS.map(k => ({ key: k, ex: expertSigs[k] })).find(
+  // Tín hiệu điểm vào từ mọi TF có thể vào lệnh (M1, M5, M15, 30m, 1H, 4H)
+  const entrySignal = LIMIT_TF_KEYS.map(k => ({ key: k, ex: expertSigs[k] })).find(
     ({ ex }) => ex && (ex.signal === "LONG" || ex.signal === "SHORT")
   );
-  // Primary signal: ưu tiên LIMIT từ 4H/1H/30m → entry M1/M5/M15 → selTF (để LIMIT không bị mất khi xem M5)
+  // Primary signal: ưu tiên LIMIT từ 4H/1H/30m → entry (bất kỳ TF) → selTF
   const LIMIT_SOURCE_TF_KEYS = ["4H", "1H", "30m"];
   let primary = null;
   for (const k of LIMIT_SOURCE_TF_KEYS) {
@@ -160,7 +216,7 @@ export default function RichAI() {
   if (!primary) primary = { sig: displaySig, fromTf: selTF };
   const primarySig = primary.sig;
   const primaryTfDef = TIMEFRAMES.find(t => t.key === primary.fromTf) || tfDef;
-  const isEntryTf = ENTRY_WATCH_TF_KEYS.includes(selTF);
+  const isEntryTf = LIMIT_TF_KEYS.includes(selTF);
   const isTrendTf = TREND_POI_TF_KEYS.includes(selTF);
   const sc = primarySig.signal==="LONG"?"#059669":primarySig.signal==="SHORT"?"#dc2626":"#b45309";
 
@@ -189,17 +245,6 @@ export default function RichAI() {
           .rich-ai-price-row{padding:var(--pad) 16px !important;gap:14px;flex-direction:column;align-items:stretch}
           .rich-ai-price-row .rich-ai-price{font-size:var(--fs-price) !important;line-height:1.1}
           .rich-ai-price-row .rich-ai-meta{font-size:var(--fs-sm) !important;line-height:1.6}
-          .rich-ai-price-row .rich-ai-confluence-title{font-size:var(--fs-xs) !important}
-          .rich-ai-price-row .rich-ai-confluence-label{font-size:var(--fs-md) !important}
-          .rich-ai-price-row .rich-ai-signal-label{font-size:var(--fs-sm) !important}
-          .rich-ai-price-row .rich-ai-signal-value{font-size:var(--fs-2xl) !important}
-          .rich-ai-price-row .rich-ai-signal-note{font-size:var(--fs-xs) !important}
-          .rich-ai-price-row .rich-ai-tp-sl .rich-ai-tp-sl-label{font-size:var(--fs-xs) !important}
-          .rich-ai-price-row .rich-ai-tp-sl .rich-ai-tp-sl-value{font-size:var(--fs-md) !important}
-          .rich-ai-trade-logic{padding:12px 16px !important;gap:14px}
-          .rich-ai-trade-logic .rich-ai-section-title{font-size:var(--fs-xs) !important}
-          .rich-ai-trade-logic .rich-ai-section-value{font-size:var(--fs-md) !important}
-          .rich-ai-trade-logic .rich-ai-section-note{font-size:var(--fs-xs) !important}
           .rich-ai-tf-tabs-row .rich-ai-tf-btn{padding:10px 6px !important;min-height:var(--touch);font-size:var(--fs-sm) !important}
           .rich-ai-tf-tabs-row .rich-ai-tf-btn .rich-ai-tf-signal{font-size:var(--fs-sm) !important}
           .rich-ai-tab-bar button{padding:12px 0 !important;font-size:var(--fs-sm) !important;min-height:var(--touch)}
@@ -224,6 +269,10 @@ export default function RichAI() {
           .rich-ai-main-grid{display:flex;flex-direction:column;gap:12px}
           .rich-ai-left{width:100%;min-width:0}
           .rich-ai-indicators-grid{grid-template-columns:repeat(2,1fr)}
+          .rich-ai-limit-tf-grid{grid-template-columns:repeat(3,minmax(90px,1fr))}
+        }
+        @media (max-width: 430px) {
+          .rich-ai-limit-tf-grid{grid-template-columns:repeat(2,minmax(100px,1fr))}
         }
       `}</style>
       <div className="rich-ai-root" style={{fontFamily:"'IBM Plex Mono',monospace",background:"#f5f5f5",minHeight:"100vh",color:"#1a1a1a",padding:"var(--pad, 10px)",display:"flex",flexDirection:"column",gap:"var(--gap, 8px)",maxWidth:1260,margin:"0 auto"}}>
@@ -273,71 +322,46 @@ export default function RichAI() {
               <div><span style={{color:"#374151"}}>ATR({tfDef?.label}) </span><span style={{color:"#0284c7",fontWeight:600}}>{displaySig.atr?.toFixed(2)||sig.atr?.toFixed(2)||"—"}</span></div>
             </div>
           </div>
-
-          <div style={{textAlign:"center",borderLeft:"1px solid #dde0e4",paddingLeft:18}}>
-            <div className="rich-ai-confluence-title" style={{fontSize:10,color:"#374151",letterSpacing:2,marginBottom:4}}>Hội tụ MTF</div>
-            <div className="rich-ai-confluence-label" style={{fontFamily:"'Bebas Neue'",fontSize:17,color:B.col,letterSpacing:2}}>{B.label}</div>
-            <div style={{display:"flex",height:5,borderRadius:3,overflow:"hidden",marginTop:6,width:110}}>
-              <div style={{flex:B.l,background:"#059669"}}/><div style={{flex:B.w,background:"#cbd5e1"}}/><div style={{flex:B.s,background:"#dc2626"}}/>
-            </div>
-            <div style={{display:"flex",gap:8,fontSize:10,marginTop:4,justifyContent:"center"}}>
-              <span style={{color:"#059669",fontWeight:600}}>▲{B.l}</span><span style={{color:"#dc2626",fontWeight:600}}>▼{B.s}</span><span style={{color:"#64748b"}}>—{B.w}</span>
-            </div>
-          </div>
-
-          <div style={{background:sc==="#059669"?"#ecfdf5":sc==="#dc2626"?"#fef2f2":"#fffbeb",border:`1px solid ${sc==="#059669"?"#a7f3d0":sc==="#dc2626"?"#fecaca":"#fde68a"}`,borderRadius:10,padding:"10px 18px",textAlign:"center",animation:primarySig.signal&&primarySig.signal!=="WAIT"?(primarySig.signal==="LONG"?"glowG 2s infinite":"glowR 2s infinite"):"none"}}>
-            <div className="rich-ai-signal-label" style={{fontSize:10,color:sc,letterSpacing:2,fontWeight:600}}>
-              {primary.fromTf !== selTF ? `Tín hiệu từ ${primaryTfDef?.label}` : `Tín hiệu từ ${tfDef?.label}${isTrendTf ? " (xu hướng)" : isEntryTf ? " (điểm vào)" : ""}`}
-              {primarySig.entryType==="limit" ? " · LIMIT" : ""}
-              {(primarySig.entryType==="limit" || isTrendTf) && primary.fromTf !== "1m" && primary.fromTf !== "5m" && primary.fromTf !== "15m" ? " · nến đã đóng" : isEntryTf && entrySignal?.key === primary.fromTf ? " · khi đóng nến" : ""}
-            </div>
-            <div className="rich-ai-signal-value" style={{fontFamily:"'Bebas Neue'",fontSize:28,color:sc,letterSpacing:2}}>{primarySig.signal||"WAIT"}</div>
-            <div className="rich-ai-signal-note" style={{fontSize:10,color:"#374151"}}>
-              {primarySig.entryType==="limit" ? `LIMIT @ ${primarySig.limitPrice}` : `Độ tin cậy ${primarySig.conf||0}%`}
-            </div>
-          </div>
-
-          {primarySig.signal&&primarySig.signal!=="WAIT"&&(
-            <div className="rich-ai-tp-sl" style={{fontSize:11,display:"flex",flexDirection:"column",gap:4}}>
-              {primarySig.entryType==="limit"&&<div style={{background:"#f0f9ff",border:"1px solid #bae6fd",borderRadius:6,padding:"4px 10px"}}>
-                <span className="rich-ai-tp-sl-label" style={{color:"#374151",fontSize:10}}>LIMIT </span><span className="rich-ai-tp-sl-value" style={{color:"#0284c7",fontWeight:700}}>{primarySig.limitPrice}</span>
-              </div>}
-              <div style={{background:"#ecfdf5",border:"1px solid #a7f3d0",borderRadius:6,padding:"4px 10px"}}>
-                <span className="rich-ai-tp-sl-label" style={{color:"#374151",fontSize:10}}>TP1 </span><span className="rich-ai-tp-sl-value" style={{color:"#059669",fontWeight:700}}>{primarySig.tp1}</span><span style={{color:"#065f46",fontSize:10}}> +{primarySig.tpPips}p</span>
-              </div>
-              <div style={{background:"#ecfdf5",border:"1px solid #a7f3d0",borderRadius:6,padding:"4px 10px"}}>
-                <span className="rich-ai-tp-sl-label" style={{color:"#374151",fontSize:10}}>TP2 </span><span style={{color:"#059669",fontWeight:700,opacity:0.85}}>{primarySig.tp2}</span>
-              </div>
-              <div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:6,padding:"4px 10px"}}>
-                <span className="rich-ai-tp-sl-label" style={{color:"#374151",fontSize:10}}>SL </span><span className="rich-ai-tp-sl-value" style={{color:"#dc2626",fontWeight:700}}>{primarySig.sl}</span><span style={{color:"#991b1b",fontSize:10}}> -{primarySig.slPips}p</span>
-              </div>
-              <div style={{fontSize:10,color:"#374151",textAlign:"right"}}>R:R 1:{primaryTfDef?.rr}</div>
-            </div>
-          )}
         </div>
 
-        {/* TRADE LOGIC: Xu hướng (TF lớn) → Điểm vào (TF nhỏ) */}
-        <div className="rich-ai-trade-logic" style={{display:"flex",flexWrap:"wrap",gap:12,alignItems:"stretch",background:"#ffffff",border:"1px solid #dde0e4",borderRadius:10,padding:"12px 14px"}}>
-          <div style={{flex:"1 1 200px",minWidth:0}}>
-            <div className="rich-ai-section-title" style={{fontSize:10,color:"#64748b",letterSpacing:1.5,marginBottom:4}}>Xu hướng (TF lớn quyết định)</div>
-            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-              <span className="rich-ai-section-value" style={{fontSize:15,fontWeight:700,color:htContext.trend==="bull"?"#059669":htContext.trend==="bear"?"#dc2626":"#64748b"}}>{htTrendLabel}</span>
-              <span style={{fontSize:11,color:"#374151"}}>từ {htFromTf}</span>
-            </div>
-            <div className="rich-ai-section-note" style={{fontSize:10,color:"#64748b",marginTop:4}}>Structure & limit từ nến đã đóng (chỉ đổi khi đóng nến TF). Chỉ vào lệnh khi TF nhỏ bắn tín hiệu cùng chiều.</div>
-          </div>
-          <div style={{flex:"1 1 200px",minWidth:0,borderLeft:"1px solid #e2e8f0",paddingLeft:12}}>
-            <div className="rich-ai-section-title" style={{fontSize:10,color:"#64748b",letterSpacing:1.5,marginBottom:4}}>Điểm vào (TF nhỏ bắn tín hiệu)</div>
-            {entrySignal ? (
-              <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                <span className="rich-ai-section-value" style={{fontSize:15,fontWeight:700,color:entrySignal.ex.signal==="LONG"?"#059669":"#dc2626"}}>{entrySignal.ex.signal}</span>
-                <span style={{fontSize:11,color:"#374151"}}>từ {entrySignal.key}</span>
-                <span style={{fontSize:11,color:"#5c5c5c"}}>@ {entrySignal.ex.entryType === "limit" ? entrySignal.ex.limitPrice : entrySignal.ex.price}</span>
-              </div>
-            ) : (
-              <div style={{fontSize:12,color:"#64748b"}}>Chờ tín hiệu từ M1 / M5 / M15</div>
-            )}
-            <div className="rich-ai-section-note" style={{fontSize:10,color:"#64748b",marginTop:4}}>M1/M5/M15 đánh giá khi đóng nến (tối đa mỗi 1m/5m/15m). Cùng chiều xu hướng → cảnh báo điểm vào.</div>
+        {/* Limit theo khung thời gian (one per TF: 1M, 5M, 15M, 30M, 1H, 4H); alerts shown inside each card */}
+        <div style={{background:"#ffffff",border:"1px solid #dde0e4",borderRadius:10,padding:"12px 14px"}}>
+          <div style={{fontSize:11,color:"#64748b",fontWeight:600,letterSpacing:1,marginBottom:8}}>Limit theo khung thời gian</div>
+          <div className="rich-ai-limit-tf-grid" style={{display:"grid",gridTemplateColumns:"repeat(6,minmax(100px,1fr))",gap:8,alignItems:"stretch"}}>
+            {LIMIT_TF_KEYS.map((tfKey)=>{
+              const t=TIMEFRAMES.find(x=>x.key===tfKey);
+              const plan=savedLimits.find((p)=>p.status==="active"&&p.tf===tfKey);
+              const entryAlertHere=signalAlert&&signalAlert.tf===tfKey;
+              const reachedHere=limitReachedTf===tfKey;
+              const cancelledHere=limitCancelledTf===tfKey;
+              return (
+                <div key={tfKey} className="rich-ai-limit-card" style={{position:"relative",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:8,padding:"10px 12px",fontSize:11,display:"flex",flexDirection:"column",gap:6,minHeight:100,minWidth:0,overflow:"visible"}}>
+                  {entryAlertHere&&(
+                    <div style={{position:"absolute",top:6,right:6,zIndex:2,fontSize:10,fontWeight:600,color:signalAlert.direction==="LONG"?"#059669":"#dc2626",background:signalAlert.direction==="LONG"?"#ecfdf5":"#fef2f2",border:"1px solid "+(signalAlert.direction==="LONG"?"#a7f3d0":"#fecaca"),borderRadius:6,padding:"4px 8px",boxShadow:"0 1px 3px rgba(0,0,0,0.08)"}}>Điểm vào: {signalAlert.direction}</div>
+                  )}
+                  <div style={{fontWeight:700,color:"#374151",letterSpacing:1}}>{t?.label||tfKey}</div>
+                  {reachedHere&&(
+                    <div style={{fontSize:10,fontWeight:600,color:"#059669",background:"#ecfdf5",borderRadius:6,padding:"4px 8px"}}>Limit đạt</div>
+                  )}
+                  {cancelledHere&&(
+                    <div style={{fontSize:10,fontWeight:600,color:"#b45309",background:"#fffbeb",borderRadius:6,padding:"4px 8px"}}>Đã hủy</div>
+                  )}
+                  {plan?(
+                    <>
+                      <span style={{fontWeight:700,color:plan.direction==="LONG"?"#059669":"#dc2626",fontSize:12}}>{plan.direction}</span>
+                      <span style={{color:"#0284c7",fontWeight:600}}>LIMIT {Number(plan.limit_price)}</span>
+                      <div style={{display:"flex",flexDirection:"column",gap:2,fontSize:10,color:"#64748b"}}>
+                        <span>TP1 {plan.tp1}</span>
+                        <span>TP2 {plan.tp2}</span>
+                        <span style={{color:"#dc2626"}}>SL {plan.sl}</span>
+                      </div>
+                    </>
+                  ):(
+                    !entryAlertHere&&!reachedHere&&!cancelledHere&&<span style={{color:"#94a3b8",fontSize:10}}>—</span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -351,7 +375,7 @@ export default function RichAI() {
               const trendLabel=ex?.trend==="bull"?"↑ bull":ex?.trend==="bear"?"↓ bear":"—";
               const trendColor=ex?.trend==="bull"?"#059669":ex?.trend==="bear"?"#dc2626":"#64748b";
               const active=selTF===t.key;
-              const roleLabel = TREND_POI_TF_KEYS.includes(t.key) ? "Xu hướng" : ENTRY_WATCH_TF_KEYS.includes(t.key) ? "Điểm vào" : null;
+              const roleLabel = TREND_POI_TF_KEYS.includes(t.key) ? "Xu hướng" : LIMIT_TF_KEYS.includes(t.key) ? "Điểm vào" : null;
               return(
                 <button
                   key={t.key}
@@ -383,17 +407,6 @@ export default function RichAI() {
             </div>
           )}
         </div>
-
-        {/* ALERT ĐIỂM VÀO */}
-        {signalAlert&&(
-          <div className="rich-ai-alert" style={{background:signalAlert.direction==="LONG"?"#ecfdf5":"#fef2f2",border:signalAlert.direction==="LONG"?"2px solid #a7f3d0":"2px solid #fecaca",borderRadius:10,padding:"12px 14px",display:"flex",alignItems:"center",gap:14,animation:"pop .3s ease",fontSize:12}}>
-            <span style={{fontSize:24}}>🔔</span>
-            <div style={{flex:1}}>
-              <div className="rich-ai-alert-title" style={{fontWeight:700,color:signalAlert.direction==="LONG"?"#059669":"#dc2626",fontSize:14,letterSpacing:1}}>Điểm vào: {signalAlert.direction}</div>
-              <div className="rich-ai-alert-detail" style={{fontSize:11,color:"#374151",marginTop:4}}>[{signalAlert.tf}] {signalAlert.message} · @{signalAlert.price} — theo xu hướng H4/1H</div>
-            </div>
-          </div>
-        )}
 
         {alert&&(
           <div style={{background:alert.pnl>0?"#ecfdf5":"#fef2f2",border:alert.pnl>0?"1px solid #a7f3d0":"1px solid #fecaca",borderRadius:8,padding:"10px 14px",display:"flex",alignItems:"center",gap:12,animation:"pop .3s ease",fontSize:12}}>
@@ -457,8 +470,8 @@ export default function RichAI() {
                 <div style={{display:"flex",flexDirection:"column",gap:10}}>
                   {[
                     { title: "Xu hướng (H4, 1H)", keys: TREND_POI_TF_KEYS },
-                    { title: "Điểm vào (M1, M5, M15)", keys: ENTRY_WATCH_TF_KEYS },
-                    { title: "Khác", keys: TIMEFRAMES.map(x=>x.key).filter(k=>!TREND_POI_TF_KEYS.includes(k)&&!ENTRY_WATCH_TF_KEYS.includes(k)) },
+                    { title: "Điểm vào (M1, M5, M15, 30m, 1H, 4H)", keys: LIMIT_TF_KEYS },
+                    { title: "Khác", keys: TIMEFRAMES.map(x=>x.key).filter(k=>!TREND_POI_TF_KEYS.includes(k)&&!LIMIT_TF_KEYS.includes(k)) },
                   ].map(grp=>(
                     <div key={grp.title}>
                       <div style={{fontSize:11,color:"#64748b",fontWeight:600,letterSpacing:1,marginBottom:6}}>{grp.title}</div>
